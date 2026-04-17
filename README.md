@@ -7,7 +7,6 @@ One Python module (`server.py`) runs a [FastMCP](https://github.com/jlowin/fastm
 | Tool | Behavior |
 |------|----------|
 | `get_store_locations` | If the user’s text mentions Amsterdam, Paris, or Lisbon (key or city name), returns that store’s address. Otherwise returns all stores. |
-| `get_bulk_pricing` | If the text contains a number, POSTs the prompt to an external API and returns the JSON response (or an error). |
 
 Store data is a small in-memory dict in `server.py` (no database).
 

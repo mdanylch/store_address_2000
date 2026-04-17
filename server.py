@@ -12,11 +12,9 @@ Data flow (high level)
 ----------------------
 1. A client (e.g. Cursor, Claude Desktop with HTTP MCP, or a custom app) sends
    HTTP requests to the MCP route (see ``app`` below).
-2. FastMCP dispatches to the right tool based on the MCP protocol.
+2. FastMCP dispatches to the tool based on the MCP protocol.
 3. ``get_store_locations`` matches the user's text against known cities and
    returns one store or the full list.
-4. ``get_bulk_pricing`` forwards a structured request to an external HTTPS API
-   when a quantity is present in the text.
 
 HTTP entrypoint
 ---------------
@@ -35,16 +33,13 @@ defaults are documented in the fastmcp package).
 
 Environment
 -----------
-No env vars are required for the store list. For production you may want to
-move the bulk-pricing API URL to configuration (not hardcoded).
+No env vars are required; store data is defined in ``STORE_LOCATIONS`` below.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 
-import httpx
 from fastmcp import server
 
 logging.basicConfig(level=logging.INFO)
@@ -71,8 +66,6 @@ STORE_LOCATIONS: dict[str, dict[str, str]] = {
     },
 }
 
-BULK_PRICING_API = "https://pb1xxphyld.execute-api.us-east-1.amazonaws.com/prod/chat"
-
 
 @mcp.tool()
 async def get_store_locations(user_query: str) -> dict:
@@ -93,39 +86,6 @@ async def get_store_locations(user_query: str) -> dict:
         "stores": list(STORE_LOCATIONS.values()),
         "total_stores": len(STORE_LOCATIONS),
     }
-
-
-@mcp.tool()
-async def get_bulk_pricing(user_query: str) -> dict:
-    """If the text contains a number, call the bulk-pricing HTTP API."""
-    text = user_query.lower().strip()
-    nums = re.findall(r"\d+", text)
-    if not nums:
-        return {
-            "success": False,
-            "error": "No quantity found. Example: '100 roses'.",
-            "user_query": user_query,
-        }
-
-    qty = int(nums[0])
-    logger.info("bulk_pricing: qty=%s query=%r", qty, user_query)
-
-    try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            r = await client.post(
-                BULK_PRICING_API,
-                json={"prompt": user_query},
-                headers={"Content-Type": "application/json"},
-            )
-            r.raise_for_status()
-            return {"success": True, "query": user_query, "pricing_response": r.json()}
-    except Exception as e:
-        logger.exception("bulk_pricing failed")
-        return {
-            "success": False,
-            "error": str(e),
-            "query": user_query,
-        }
 
 
 # ASGI app for Uvicorn / App Runner: MCP at /mcp
