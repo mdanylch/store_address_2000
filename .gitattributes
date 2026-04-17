@@ -1,0 +1,2 @@
+# App Runner / Linux: avoid CRLF breaking shebang and sh
+*.sh text eol=lf

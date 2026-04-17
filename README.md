@@ -29,10 +29,27 @@ uvicorn server:app --host 0.0.0.0 --port 8000
 
 MCP HTTP endpoint base path: **`http://<host>:8000/mcp`**. Point your MCP client at that URL per its docs (transport type must match what FastMCP exposes for your version).
 
-## Deploy on AWS App Runner (outline)
+## AWS App Runner (Python 3.11)
 
-- Use a **Dockerfile** or App Runner’s **Python** build: install `requirements.txt`, start command `uvicorn server:app --host 0.0.0.0 --port 8080` (or the port App Runner sets via `PORT`).
-- Configure **HTTPS** in front of the service; do not expose plain HTTP to the public internet without TLS termination at the load balancer.
+Use the **GitHub** source for this repo. Suggested settings:
+
+| Setting | Value |
+|--------|--------|
+| Runtime | Python 3.11 |
+| Port | `8080` |
+| Build command | `sh start.sh` |
+| Start command | `sh run.sh` |
+
+`start.sh` runs `pip3 install -r requirements.txt` during the **build** phase.  
+`run.sh` runs **Uvicorn** and listens on **`$PORT`** (App Runner sets `PORT`; it defaults to `8080` if unset).
+
+**Important:** The **start** command must be a long‑running web process (Uvicorn). Using only `pip3 install -r requirements.txt` as the start command will install packages and then exit, so the service will not stay healthy.
+
+After deploy, the MCP URL is:
+
+`https://<your-app-runner-domain>/mcp`
+
+Configure **HTTPS** in front of the service; TLS is terminated at App Runner when you use the default service URL.
 
 ## Files
 
@@ -40,4 +57,7 @@ MCP HTTP endpoint base path: **`http://<host>:8000/mcp`**. Point your MCP client
 |------|------|
 | `server.py` | MCP tools + `app` ASGI entrypoint + inline documentation |
 | `requirements.txt` | Python dependencies |
+| `start.sh` | App Runner **build**: install dependencies |
+| `run.sh` | App Runner **start**: `uvicorn` on `$PORT` |
+| `.gitattributes` | Shell scripts checked out with LF (Linux/App Runner) |
 | `.gitignore` | Ignores venvs and caches |
