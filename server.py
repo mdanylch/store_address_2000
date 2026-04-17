@@ -18,9 +18,9 @@ Data flow (high level)
 
 HTTP entrypoint
 ---------------
-The ASGI application is ``app``, mounted so the MCP HTTP transport lives at
-``/mcp`` (not at ``/``). Health checks or load balancers should target a path
-you configure separately if you add a root route later.
+The ASGI application ``app`` exposes **GET /** and **GET /health** (plain ``ok``)
+for load-balancer health checks (e.g. AWS App Runner). The MCP streamable HTTP
+transport is at **/mcp**.
 
 Run locally::
 
@@ -41,6 +41,9 @@ from __future__ import annotations
 import logging
 
 from fastmcp import server
+from starlette.applications import Starlette
+from starlette.responses import PlainTextResponse
+from starlette.routing import Mount, Route
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -88,5 +91,19 @@ async def get_store_locations(user_query: str) -> dict:
     }
 
 
-# ASGI app for Uvicorn / App Runner: MCP at /mcp
-app = mcp.http_app(path="/mcp")
+_mcp_asgi = mcp.http_app(path="/mcp")
+
+
+async def _health(_):
+    return PlainTextResponse("ok")
+
+
+# Outer app: health routes for App Runner + MCP under /mcp (must preserve MCP lifespan)
+app = Starlette(
+    routes=[
+        Route("/", _health),
+        Route("/health", _health),
+        Mount("/", _mcp_asgi),
+    ],
+    lifespan=_mcp_asgi.router.lifespan_context,
+)

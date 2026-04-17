@@ -40,10 +40,13 @@ Use the **GitHub** source for this repo. Suggested settings:
 | Build command | `sh start.sh` |
 | Start command | `sh run.sh` |
 
-`start.sh` runs `pip3 install -r requirements.txt` during the **build** phase.  
-`run.sh` runs **Uvicorn** and listens on **`$PORT`** (App Runner sets `PORT`; it defaults to `8080` if unset).
+`start.sh` runs `pip3 install` during the **build** phase (validates the lockfile).
 
-**Important:** The **start** command must be a long‑running web process (Uvicorn). Using only `pip3 install -r requirements.txt` as the start command will install packages and then exit, so the service will not stay healthy.
+`run.sh` runs **`pip3 install`** again, then **`python3 -m uvicorn`**. That is required because App Runner’s Python **runtime** image only copies your `/app` folder from the build stage; packages installed during build are **not** carried into the slim runtime image unless you re-install at start (same pattern as using `pip3 install` alone as the start command on other projects).
+
+**Health checks:** The app responds with **200** on **`/`** and **`/health`** so the default App Runner HTTP health check can succeed. MCP clients still use **`/mcp`**.
+
+**Important:** The **start** command must be a long‑running process — use **`sh run.sh`** (install + Uvicorn), not `pip3 install` alone.
 
 After deploy, the MCP URL is:
 
