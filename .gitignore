@@ -20,6 +20,9 @@ wheels/
 .installed.cfg
 *.egg
 
+# Vendored deps (built in App Runner / CI; not committed)
+deps/
+
 # Virtual environments
 .venv/
 venv/

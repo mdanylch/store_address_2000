@@ -40,9 +40,9 @@ Use the **GitHub** source for this repo. Suggested settings:
 | Build command | `sh start.sh` |
 | Start command | `sh run.sh` |
 
-`start.sh` runs `pip3 install` during the **build** phase (validates the lockfile).
+`start.sh` runs `pip3 install -r requirements.txt -t deps`, putting all wheels under **`deps/`** inside `/app`. That folder is included when App Runner copies `/app` into the **runtime** image (unlike packages installed only into the build image’s global `site-packages`).
 
-`run.sh` runs **`pip3 install`** again, then **`python3 -m uvicorn`**. That is required because App Runner’s Python **runtime** image only copies your `/app` folder from the build stage; packages installed during build are **not** carried into the slim runtime image unless you re-install at start (same pattern as using `pip3 install` alone as the start command on other projects).
+`run.sh` sets **`PYTHONPATH`** to `./deps` and runs **`python3 -m uvicorn`** immediately—no pip on start, so the port is open right away for health checks.
 
 **Health checks:** The app responds with **200** on **`/`** and **`/health`** so the default App Runner HTTP health check can succeed. MCP clients still use **`/mcp`**.
 
