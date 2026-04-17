@@ -37,8 +37,10 @@ Use the **GitHub** source for this repo. Suggested settings:
 |--------|--------|
 | Runtime | Python 3.11 |
 | Port | `8080` |
-| Build command | `sh start.sh` |
-| Start command | `sh run.sh` |
+| **Build command** | **`sh start.sh`** |
+| **Start command** | **`sh run.sh`** |
+
+**Do not use the same script for both.** **`start.sh`** only installs packages into `deps/` and then **exits**. **`run.sh`** starts Uvicorn and must be the **Start** command. If **Start** is `sh start.sh`, `pip3 install …`, or anything that exits after install, you get **container exit code 0** and **nothing listening on 8080** (your app logs will show pip, then silence).
 
 `start.sh` runs `pip3 install -r requirements.txt -t deps`, putting all wheels under **`deps/`** inside `/app`. That folder is included when App Runner copies `/app` into the **runtime** image (unlike packages installed only into the build image’s global `site-packages`).
 
