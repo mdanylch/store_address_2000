@@ -33,20 +33,85 @@ defaults are documented in the fastmcp package).
 
 Environment
 -----------
-No env vars are required; store data is defined in ``STORE_LOCATIONS`` below.
+Optional **CustomHeaderAuth** (e.g. Webex MCP):
+
+- ``MCP_REQUEST_HEADERS`` — If unset, all routes except health stay open. If set:
+
+  - **Plain string** (does not start with ``{``): treat as the secret value clients
+    must send in the HTTP header named ``MCP_REQUEST_HEADERS`` (matches Webex
+    CustomHeaderAuth when header name and env name align).
+
+  - **JSON object**: e.g. ``{"X-Api-Key": "secret", "X-Other": "v2"}`` — every
+    listed header must match (case-insensitive names per HTTP).
+
+Health checks ``GET /`` and ``GET /health`` never require these headers (App Runner).
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 
 from fastmcp import server
 from starlette.applications import Starlette
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Mount, Route
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _load_custom_header_rules() -> dict[str, str] | None:
+    """Parse MCP_REQUEST_HEADERS env into required header name -> value."""
+    raw = os.environ.get("MCP_REQUEST_HEADERS", "").strip()
+    if not raw:
+        return None
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"MCP_REQUEST_HEADERS JSON invalid: {e}") from e
+        if not isinstance(data, dict):
+            raise ValueError("MCP_REQUEST_HEADERS JSON must be a JSON object")
+        out = {str(k): str(v) for k, v in data.items()}
+        return out if out else None
+    # Single header: name MCP_REQUEST_HEADERS, value = env string (Webex default pattern)
+    return {"MCP_REQUEST_HEADERS": raw}
+
+
+class CustomHeaderAuthMiddleware(BaseHTTPMiddleware):
+    """Require configured headers on protected paths (not on / or /health GET)."""
+
+    def __init__(self, app, required: dict[str, str] | None):
+        super().__init__(app)
+        self.required = required
+
+    async def dispatch(self, request: Request, call_next):
+        if self.required is None:
+            return await call_next(request)
+
+        path = request.url.path
+        if request.method == "GET" and path in ("/", "/health"):
+            return await call_next(request)
+
+        for name, expected in self.required.items():
+            got = request.headers.get(name)
+            if got != expected:
+                logger.warning("custom header auth failed for path=%s header=%s", path, name)
+                return PlainTextResponse("Unauthorized", status_code=401)
+
+        return await call_next(request)
+
+
+try:
+    _HEADER_RULES = _load_custom_header_rules()
+except ValueError as e:
+    logger.error("%s", e)
+    raise
 
 mcp = server.FastMCP("Store Address MCP")
 
@@ -104,6 +169,9 @@ app = Starlette(
         Route("/", _health),
         Route("/health", _health),
         Mount("/", _mcp_asgi),
+    ],
+    middleware=[
+        Middleware(CustomHeaderAuthMiddleware, required=_HEADER_RULES),
     ],
     lifespan=_mcp_asgi.router.lifespan_context,
 )

@@ -56,6 +56,18 @@ After deploy, the MCP URL is:
 
 Configure **HTTPS** in front of the service; TLS is terminated at App Runner when you use the default service URL.
 
+### Webex: CustomHeaderAuth
+
+In App Runner, add an environment variable **`MCP_REQUEST_HEADERS`** (same name Webex uses for the header in **CustomHeaderAuth**):
+
+- **Value** = the secret string Webex will send. The server expects an HTTP header named **`MCP_REQUEST_HEADERS`** with exactly that value on requests to **`/mcp`** (and any path other than **`GET /`** and **`GET /health`**).
+
+**Multiple headers:** set the value to a JSON object, for example:
+
+`{"X-My-Header": "token1", "X-Other": "token2"}`
+
+Health checks do **not** send this header; **`/`** and **`/health`** stay unauthenticated so App Runner stays healthy.
+
 ## Files
 
 | File | Role |
