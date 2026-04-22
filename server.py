@@ -1,57 +1,32 @@
 """
-Store-address MCP over HTTP (FastMCP).
+Store Address MCP — a small FastMCP server over HTTP (Uvicorn / AWS App Runner).
 
-What this is
-------------
-An MCP (Model Context Protocol) server that exposes *tools* an AI client can call.
-This file builds one FastMCP instance, registers tools, then exposes the MCP
-endpoint as a normal ASGI app (Starlette) so you can run it with Uvicorn—on your
-machine or on AWS App Runner.
+Endpoints
+---------
+- ``GET /`` and ``GET /health`` — return ``ok`` (for load balancer health checks).
+- ``/mcp`` — MCP streamable HTTP. Clients must use the full URL including ``/mcp``,
+  e.g. ``https://<host>/mcp``.
 
-Data flow (high level)
-----------------------
-1. A client (e.g. Cursor, Claude Desktop with HTTP MCP, or a custom app) sends
-   HTTP requests to the MCP route (see ``app`` below).
-2. FastMCP dispatches to the tool based on the MCP protocol.
-3. ``get_store_locations`` matches the user's text against known cities and
-   returns one store or the full list.
+Optional auth (env ``MCP_REQUEST_HEADERS``)
+-------------------------------------------
+If unset, all routes stay open. If set:
 
-HTTP entrypoint
----------------
-The ASGI application ``app`` exposes **GET /** and **GET /health** (plain ``ok``)
-for load-balancer health checks (e.g. AWS App Runner). The MCP streamable HTTP
-transport is at **/mcp**.
+- Plain text (not JSON): clients must send header ``MCP_REQUEST_HEADERS`` with this exact value.
+- JSON object: each ``"Header-Name": "value"`` pair must match incoming headers.
 
-Run locally::
+Health routes never require these headers.
 
-    pip install -r requirements.txt
-    uvicorn server:app --host 0.0.0.0 --port 8000
-
-Then the MCP HTTP base URL is ``http://localhost:8000/mcp`` (exact path depends
-on your MCP client’s expectations for streamable HTTP vs legacy SSE—FastMCP
-defaults are documented in the fastmcp package).
-
-Environment
------------
-Optional **CustomHeaderAuth** (e.g. Webex MCP):
-
-- ``MCP_REQUEST_HEADERS`` — If unset, all routes except health stay open. If set:
-
-  - **Plain string** (does not start with ``{``): treat as the secret value clients
-    must send in the HTTP header named ``MCP_REQUEST_HEADERS`` (matches Webex
-    CustomHeaderAuth when header name and env name align).
-
-  - **JSON object**: e.g. ``{"X-Api-Key": "secret", "X-Other": "v2"}`` — every
-    listed header must match (case-insensitive names per HTTP).
-
-Health checks ``GET /`` and ``GET /health`` never require these headers (App Runner).
+Run locally: ``uvicorn server:app --host 0.0.0.0 --port 8000`` then MCP URL is ``http://localhost:8000/mcp``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 from fastmcp import server
 from starlette.applications import Starlette
@@ -66,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def _load_custom_header_rules() -> dict[str, str] | None:
-    """Parse MCP_REQUEST_HEADERS env into required header name -> value."""
+    """Return required header name -> value from env, or None if auth is disabled."""
     raw = os.environ.get("MCP_REQUEST_HEADERS", "").strip()
     if not raw:
         return None
@@ -74,17 +49,16 @@ def _load_custom_header_rules() -> dict[str, str] | None:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as e:
-            raise ValueError(f"MCP_REQUEST_HEADERS JSON invalid: {e}") from e
+            raise ValueError(f"MCP_REQUEST_HEADERS JSON is invalid: {e}") from e
         if not isinstance(data, dict):
-            raise ValueError("MCP_REQUEST_HEADERS JSON must be a JSON object")
-        out = {str(k): str(v) for k, v in data.items()}
+            raise ValueError("MCP_REQUEST_HEADERS JSON must be an object")
+        out = {str(k).strip(): str(v).strip() for k, v in data.items()}
         return out if out else None
-    # Single header: name MCP_REQUEST_HEADERS, value = env string (Webex default pattern)
     return {"MCP_REQUEST_HEADERS": raw}
 
 
 class CustomHeaderAuthMiddleware(BaseHTTPMiddleware):
-    """Require configured headers on protected paths (not on / or /health GET)."""
+    """If rules are set, require matching headers on all routes except GET / and GET /health."""
 
     def __init__(self, app, required: dict[str, str] | None):
         super().__init__(app)
@@ -95,27 +69,26 @@ class CustomHeaderAuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
+        if request.method == "OPTIONS":
+            return await call_next(request)
         if request.method == "GET" and path in ("/", "/health"):
             return await call_next(request)
 
         for name, expected in self.required.items():
-            got = request.headers.get(name)
-            if got != expected:
-                logger.warning("custom header auth failed for path=%s header=%s", path, name)
+            if request.headers.get(name) != expected:
+                logger.warning("auth failed: %s %s", request.method, path)
                 return PlainTextResponse("Unauthorized", status_code=401)
 
         return await call_next(request)
 
 
-try:
-    _HEADER_RULES = _load_custom_header_rules()
-except ValueError as e:
-    logger.error("%s", e)
-    raise
+_HEADER_RULES = _load_custom_header_rules()
+
+# Mock customer-order API (no auth). Query: ?id=<order_id>
+CUSTOMER_ORDER_API = "https://67e9aa0bbdcaa2b7f5b9ed62.mockapi.io/customerOrder"
 
 mcp = server.FastMCP("Store Address MCP")
 
-# Built-in catalog: key = lowercase token to match in user text.
 STORE_LOCATIONS: dict[str, dict[str, str]] = {
     "amsterdam": {
         "city": "Amsterdam",
@@ -141,19 +114,55 @@ async def get_store_locations(user_query: str) -> dict:
     q = user_query.lower()
     for key, loc in STORE_LOCATIONS.items():
         if key in q or loc["city"].lower() in q:
-            logger.info("locations: matched city=%s", key)
             return {
                 "success": True,
                 "city": loc["city"],
                 "address": loc["address"],
                 "country": loc["country"],
             }
-    logger.info("locations: no city match, returning all")
     return {
         "success": True,
         "stores": list(STORE_LOCATIONS.values()),
         "total_stores": len(STORE_LOCATIONS),
     }
+
+
+def _fetch_order_json(order_id: str) -> object:
+    """Synchronous GET to MockAPI; used from async via asyncio.to_thread."""
+    url = f"{CUSTOMER_ORDER_API}?{urlencode({'id': order_id})}"
+    with urlopen(url, timeout=30) as resp:
+        return json.loads(resp.read().decode())
+
+
+@mcp.tool()
+async def check_order_status(order_id: str) -> dict:
+    """Look up a customer order by id and return its status (e.g. new, cancel)."""
+    oid = order_id.strip()
+    if not oid.isdigit():
+        return {
+            "success": False,
+            "error": "order_id must be digits only (e.g. 64).",
+        }
+    try:
+        payload = await asyncio.to_thread(_fetch_order_json, oid)
+    except Exception as e:
+        logger.warning("check_order_status: request failed order_id=%s err=%s", oid, e)
+        return {"success": False, "error": "Could not reach order service.", "order_id": oid}
+
+    if not isinstance(payload, list) or len(payload) == 0:
+        return {
+            "success": False,
+            "error": "No order found for this id.",
+            "order_id": oid,
+        }
+
+    row = payload[0]
+    if not isinstance(row, dict):
+        return {"success": False, "error": "Unexpected response shape.", "order_id": oid}
+
+    status = row.get("status", "")
+    # Caller asked for status only; include success flag for errors vs OK.
+    return {"success": True, "status": status}
 
 
 _mcp_asgi = mcp.http_app(path="/mcp")
@@ -163,15 +172,12 @@ async def _health(_):
     return PlainTextResponse("ok")
 
 
-# Outer app: health routes for App Runner + MCP under /mcp (must preserve MCP lifespan)
 app = Starlette(
     routes=[
         Route("/", _health),
         Route("/health", _health),
         Mount("/", _mcp_asgi),
     ],
-    middleware=[
-        Middleware(CustomHeaderAuthMiddleware, required=_HEADER_RULES),
-    ],
+    middleware=[Middleware(CustomHeaderAuthMiddleware, required=_HEADER_RULES)],
     lifespan=_mcp_asgi.router.lifespan_context,
 )
