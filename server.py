@@ -105,6 +105,11 @@ STORE_LOCATIONS: dict[str, dict[str, str]] = {
         "address": "2740-244 Porto Salvo, Portugal",
         "country": "Portugal",
     },
+    "las_vegas": {
+        "city": "Las Vegas",
+        "address": "3950 S Las Vegas Blvd, Las Vegas, NV 89119, United States",
+        "country": "United States",
+    },
 }
 
 
