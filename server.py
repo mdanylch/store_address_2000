@@ -110,6 +110,11 @@ STORE_LOCATIONS: dict[str, dict[str, str]] = {
         "address": "3950 S Las Vegas Blvd, Las Vegas, NV 89119, United States",
         "country": "United States",
     },
+    "austin": {
+        "city": "Austin",
+        "address": "401 Congress Ave, Austin, TX 78701, United States",
+        "country": "United States",
+    },
 }
 
 
